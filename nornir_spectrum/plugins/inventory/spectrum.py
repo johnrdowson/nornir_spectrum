@@ -40,20 +40,28 @@ def platform_calc(model_type_name: str, device_type: str) -> str:
     return platform
 
 
-def process_data(hosts_data: List[Dict[str, str]]) -> Tuple[Hosts, Groups]:
+def _process_data(hosts_data: List[Dict[str, str]]) -> Tuple[Hosts, Groups]:
+    """
+    Converts the parsed data from Spectrum and returns the host and groups data.
+    The groups
+    """
 
+    # Placeholders for the hosts and groups data which will be popuated
     hosts = Hosts()
     groups = Groups()
 
+    # Main loop to interate over each device model
     for device in hosts_data:
 
-        glob_colls_str = device.pop("collections_model_name_string")
-        glob_colls_list = glob_colls_str.split(":") if glob_colls_str else []
+        # Extract the unique Global Collections for which this host is a member
+        # of
+        gc_str = device.pop("collections_model_name_string")
+        gc_list = list(set(gc_str.split(":"))) if gc_str else []
 
-        for gc in glob_colls_list:
+        # Add each Global Collection as a group if it doesn't already exist
+        for gc in gc_list:
             groups.setdefault(gc, Group(gc))
 
-        hostname = device.pop("model_name")
         port = SPECTRUM_PORT_MAP.get(device.get("ncm_potential_comm_modes"))
 
         if port:
@@ -71,12 +79,14 @@ def process_data(hosts_data: List[Dict[str, str]]) -> Tuple[Hosts, Groups]:
         if platform == "junos":
             port = 830
 
+        hostname = device.pop("model_name")
+
         hosts[hostname] = Host(
             name=hostname,
             hostname=device.pop("network_address"),
             port=port,
             platform=platform,
-            groups=ParentGroups([groups[gc] for gc in glob_colls_list]),
+            groups=ParentGroups([groups[gc] for gc in gc_list]),
             data={**device},
         )
 
@@ -84,12 +94,19 @@ def process_data(hosts_data: List[Dict[str, str]]) -> Tuple[Hosts, Groups]:
 
 
 class SpectrumInventory:
-    def __init__(self, filter_expr: Optional[str] = None) -> None:
+    def __init__(
+        self,
+        filter_expr: Optional[str] = None,
+        extra_attrs: Optional[List[Union[int, str]]] = [],
+    ) -> None:
         self.conn = SpectrumClient()
         self.filter_expr = filter_expr
+        self.extra_attrs = extra_attrs
 
     def load(self) -> Inventory:
+        """ Retrieves the inventory of devices from Spectrum """
 
+        # Attributes to collect for each devices (refer to pyspectrum for)
         attrs = [
             "device_type",
             "network_address",
@@ -97,8 +114,10 @@ class SpectrumInventory:
             "collections_model_name_string",
             "topology_model_name_string",
             "ncm_potential_comm_modes",
-        ]
+        ] + self.extra_attrs
 
+        # When a filter expression is supplied, the 'fetch_models' method must
+        # be used in order to specify this in the POST request.
         if self.filter_expr:
             data = self.conn.fetch_models(
                 devices_only=True, filters=self.filter_expr, attrs=attrs
@@ -106,6 +125,6 @@ class SpectrumInventory:
         else:
             data = self.conn.fetch_all_devices(attrs=attrs).result
 
-        hosts, groups = process_data(data)
+        hosts, groups = _process_data(data)
 
         return Inventory(hosts=hosts, groups=groups, defaults=Defaults())
