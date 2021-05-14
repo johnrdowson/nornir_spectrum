@@ -111,6 +111,7 @@ class SpectrumInventory:
             "device_type",
             "network_address",
             "condition",
+            "model_class",
             "collections_model_name_string",
             "topology_model_name_string",
             "ncm_potential_comm_modes",
