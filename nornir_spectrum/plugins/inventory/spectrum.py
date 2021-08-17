@@ -1,4 +1,3 @@
-import re
 from nornir.core.inventory import (
     Inventory,
     Group,
@@ -8,8 +7,13 @@ from nornir.core.inventory import (
     Defaults,
     ParentGroups,
 )
-from typing import Optional, Union, List, Tuple, Dict
-from pyspectrum import SpectrumClient
+
+import re
+import os
+from typing import Optional, Union, List, Tuple, Dict, Any
+
+import requests
+from lxml import etree
 
 SPECTRUM_PORT_MAP = {"32": 22, "7": 22, "3": 23}
 
@@ -38,6 +42,19 @@ def platform_calc(model_type_name: str, device_type: str) -> str:
             platform = "junos"
 
     return platform
+
+
+def _strip_ns(root: etree.Element) -> etree.Element:
+    """
+    Removes all namespaces from an XML Element tree. This will make parsing the
+    XML element much simpler.
+    """
+
+    for elem in root.getiterator():
+        elem.tag = etree.QName(elem).localname
+
+    etree.cleanup_namespaces(root)
+    return root
 
 
 def _process_data(hosts_data: List[Dict[str, str]]) -> Tuple[Hosts, Groups]:
@@ -96,35 +113,62 @@ def _process_data(hosts_data: List[Dict[str, str]]) -> Tuple[Hosts, Groups]:
 class SpectrumInventory:
     def __init__(
         self,
-        filter_expr: Optional[str] = None,
-        extra_attrs: Optional[List[Union[int, str]]] = [],
+        url: Optional[str] = None,
+        user: Optional[str] = None,
+        password: Optional[str] = None,
+        verify: Union[bool, str] = False,
     ) -> None:
-        self.conn = SpectrumClient()
-        self.filter_expr = filter_expr
-        self.extra_attrs = extra_attrs
+        self.url = url or os.environ.get("SPECTRUM_URL")
+        self.user = user or os.environ.get("SPECTRUM_USER")
+        self.password = password or os.environ.get("SPECTRUM_PASSWORD")
+        self.verify = verify
 
     def load(self) -> Inventory:
-        """ Retrieves the inventory of devices from Spectrum """
+        """Retrieves the inventory of devices from Spectrum"""
 
-        # Attributes to collect for each devices (refer to pyspectrum for)
+        url = f"{self.url}/spectrum/restful"
+
         attrs = [
-            "device_type",
-            "network_address",
-            "condition",
-            "model_class",
-            "collections_model_name_string",
-            "topology_model_name_string",
-            "ncm_potential_comm_modes",
-        ] + self.extra_attrs
+            "0x1006e",  # Model Name
+            "0x10000",  # Model Type Name
+            "0x11ee8",  # Model Class
+            "0x23000e",  # Device Type
+            "0x12d7f",  # Network Address
+            "0x1000a",  # Condition
+            "0x12adb",  # Collections Model Name String
+            "0x129e7",  # Topology Model Name String
+            "0x12beb",  # NCM Potential Comm Modes
+        ]
 
-        # When a filter expression is supplied, the 'fetch_models' method must
-        # be used in order to specify this in the POST request.
-        if self.filter_expr:
-            data = self.conn.fetch_models(
-                devices_only=True, filters=self.filter_expr, attrs=attrs
-            ).result
-        else:
-            data = self.conn.fetch_all_devices(attrs=attrs).result
+        params = {
+            "attr": attrs,
+            "throttlesize": "9999",
+        }
+
+        resp = requests.get(
+            url=url,
+            auth=(self.username, self.password),
+            headers={"Content-Type": "application/xml"},
+            params=params,
+        )
+
+        resp.raise_for_status()
+
+        # Parse XML Data
+
+        _xparser = etree.XMLParser(recover=True, remove_blank_text=True)
+
+        try:
+            root = etree.fromstring(resp.content, parser=_xparser)
+        except etree.XMLSyntaxError as err:
+            raise ValueError(f"Unable to parse XML response\n\n{err}")
+
+        root = _strip_ns(root)
+
+        data = [
+            {attr.get("id"): attr.text for attr in model}
+            for model in self.root[0]
+        ]
 
         hosts, groups = _process_data(data)
 
