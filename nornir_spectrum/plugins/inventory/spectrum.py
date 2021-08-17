@@ -64,43 +64,51 @@ def _process_data(hosts_data: List[Dict[str, str]]) -> Tuple[Hosts, Groups]:
     """
 
     # Placeholders for the hosts and groups data which will be popuated
+
     hosts = Hosts()
     groups = Groups()
 
-    # Main loop to interate over each device model
     for device in hosts_data:
 
-        # Extract the unique Global Collections for which this host is a member
-        # of
-        gc_str = device.pop("collections_model_name_string")
+        # Global Collections for which this host is a member of
+
+        gc_str = device.pop("0x12adb")
         gc_list = list(set(gc_str.split(":"))) if gc_str else []
 
-        # Add each Global Collection as a group if it doesn't already exist
+        # Create a group for each Global Collection if it doesn't already exist
+
         for gc in gc_list:
             groups.setdefault(gc, Group(gc))
 
-        port = SPECTRUM_PORT_MAP.get(device.get("ncm_potential_comm_modes"))
+        # Retrieve the management port
 
-        if port:
-            platform = platform_calc(
-                device.get("model_type_name"), device.get("device_type")
-            )
-        else:
+        port = SPECTRUM_PORT_MAP.get(device.get("0x12beb"))
+
+        # If no port then assume this host cannot be accessed via CLI (skip)
+
+        if not port:
             continue
 
+        # Calculate platform type
+
+        platform = platform_calc(device.get("0x10000"), device.get("0x23000e"))
+
         # Telnet only Cisco devices need specific platform for Netmiko to work
+
         if port == 23 and platform == "cisco_ios":
             platform = "cisco_ios_telnet"
 
         # NETCONF for all Juniper devices
+
         if platform == "junos":
             port = 830
 
-        hostname = device.pop("model_name")
+        # Finally create a host object
 
+        hostname = device.pop("0x1006e")
         hosts[hostname] = Host(
             name=hostname,
-            hostname=device.pop("network_address"),
+            hostname=device.pop("0x12d7f"), # Network Address
             port=port,
             platform=platform,
             groups=ParentGroups([groups[gc] for gc in gc_list]),
@@ -114,19 +122,19 @@ class SpectrumInventory:
     def __init__(
         self,
         url: Optional[str] = None,
-        user: Optional[str] = None,
+        username: Optional[str] = None,
         password: Optional[str] = None,
         verify: Union[bool, str] = False,
     ) -> None:
         self.url = url or os.environ.get("SPECTRUM_URL")
-        self.user = user or os.environ.get("SPECTRUM_USER")
+        self.username = username or os.environ.get("SPECTRUM_USERNAME")
         self.password = password or os.environ.get("SPECTRUM_PASSWORD")
         self.verify = verify
 
     def load(self) -> Inventory:
         """Retrieves the inventory of devices from Spectrum"""
 
-        url = f"{self.url}/spectrum/restful"
+        url = f"{self.url}/spectrum/restful/devices"
 
         attrs = [
             "0x1006e",  # Model Name
@@ -164,10 +172,10 @@ class SpectrumInventory:
             raise ValueError(f"Unable to parse XML response\n\n{err}")
 
         root = _strip_ns(root)
+        models = root.findall(".//model")
 
         data = [
-            {attr.get("id"): attr.text for attr in model}
-            for model in self.root[0]
+            {attr.get("id"): attr.text for attr in model} for model in models
         ]
 
         hosts, groups = _process_data(data)
