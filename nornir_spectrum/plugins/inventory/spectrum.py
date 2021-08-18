@@ -10,10 +10,13 @@ from nornir.core.inventory import (
 
 import re
 import os
+import urllib3
 from typing import Optional, Union, List, Tuple, Dict, Any
 
 import requests
 from lxml import etree
+
+urllib3.disable_warnings()
 
 SPECTRUM_PORT_MAP = {"32": 22, "7": 22, "3": 23}
 
@@ -125,11 +128,13 @@ class SpectrumInventory:
         username: Optional[str] = None,
         password: Optional[str] = None,
         verify: Union[bool, str] = False,
+        proxies: Optional[Dict[str, Union[str, None]]] = None,
     ) -> None:
         self.url = url or os.environ.get("SPECTRUM_URL")
         self.username = username or os.environ.get("SPECTRUM_USERNAME")
         self.password = password or os.environ.get("SPECTRUM_PASSWORD")
         self.verify = verify
+        self.proxies = proxies
 
     def load(self) -> Inventory:
         """Retrieves the inventory of devices from Spectrum"""
@@ -159,6 +164,7 @@ class SpectrumInventory:
             headers={"Content-Type": "application/xml"},
             params=params,
             verify=self.verify,
+            proxies=self.proxies,
         )
 
         resp.raise_for_status()
