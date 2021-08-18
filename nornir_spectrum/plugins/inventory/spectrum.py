@@ -108,7 +108,7 @@ def _process_data(hosts_data: List[Dict[str, str]]) -> Tuple[Hosts, Groups]:
         hostname = device.pop("0x1006e")
         hosts[hostname] = Host(
             name=hostname,
-            hostname=device.pop("0x12d7f"), # Network Address
+            hostname=device.pop("0x12d7f"),  # Network Address
             port=port,
             platform=platform,
             groups=ParentGroups([groups[gc] for gc in gc_list]),
@@ -158,6 +158,7 @@ class SpectrumInventory:
             auth=(self.username, self.password),
             headers={"Content-Type": "application/xml"},
             params=params,
+            verify=self.verify,
         )
 
         resp.raise_for_status()
