@@ -112,7 +112,7 @@ def _process_data(hosts_data: List[Dict[str, str]]) -> Tuple[Hosts, Groups]:
         data = dict()
         data["model_type"] = device.pop("0x10000", "")
         data["condition"] = int(device.pop("0x1000a", 0))
-        data["model_class"] = device.pop("0x11ee8", "")
+        data["model_class"] = int(device.pop("0x11ee8", 0))
         data["device_type"] = device.pop("0x23000e", "")
         data["topology_string"] = device.pop("0x129e7", "")
         data.update(device)
