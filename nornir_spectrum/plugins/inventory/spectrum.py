@@ -85,7 +85,7 @@ def _process_data(hosts_data: List[Dict[str, str]]) -> Tuple[Hosts, Groups]:
 
         # Retrieve the management port
 
-        port = SPECTRUM_PORT_MAP.get(device.get("0x12beb"))
+        port = SPECTRUM_PORT_MAP.get(device.pop("0x12beb"))
 
         # If no port then assume this host cannot be accessed via CLI (skip)
 
@@ -106,16 +106,27 @@ def _process_data(hosts_data: List[Dict[str, str]]) -> Tuple[Hosts, Groups]:
         if platform == "junos":
             port = 830
 
-        # Finally create a host object
+        # Use names for data keys otherwise the advanced filtering not possible
+        # in Nornir
 
-        hostname = device.pop("0x1006e")
+        data = dict()
+        data["model_type"] = device.pop("0x10000", "")
+        data["condition"] = int(device.pop("0x1000a", 0))
+        data["model_class"] = device.pop("0x11ee8", "")
+        data["device_type"] = device.pop("0x23000e", "")
+        data["topology_string"] = device.pop("0x129e7", "")
+        data.update(device)
+
+        # Finally create the host object
+
+        hostname = data.pop("0x1006e")
         hosts[hostname] = Host(
             name=hostname,
-            hostname=device.pop("0x12d7f"),  # Network Address
+            hostname=data.pop("0x12d7f"),  # Network Address
             port=port,
             platform=platform,
             groups=ParentGroups([groups[gc] for gc in gc_list]),
-            data={**device},
+            data={**data},
         )
 
     return (hosts, groups)
@@ -171,10 +182,8 @@ class SpectrumInventory:
 
         # Parse XML Data
 
-        _xparser = etree.XMLParser(recover=True, remove_blank_text=True)
-
         try:
-            root = etree.fromstring(resp.content, parser=_xparser)
+            root = etree.fromstring(resp.content)
         except etree.XMLSyntaxError as err:
             raise ValueError(f"Unable to parse XML response\n\n{err}")
 
