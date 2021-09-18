@@ -101,6 +101,13 @@ def _process_data(hosts_data: List[Dict[str, str]]) -> Tuple[Hosts, Groups]:
         if port == 23 and platform == "cisco_ios":
             platform = "cisco_ios_telnet"
 
+        # Fall back to generic
+
+        if port == 22 and not platform:
+            platform = "generic"
+        elif port == 23:
+            platform = "generic_telnet"
+
         # NETCONF for all Juniper devices
 
         if platform == "junos":
