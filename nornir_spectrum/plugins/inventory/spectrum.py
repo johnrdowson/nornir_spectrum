@@ -6,6 +6,7 @@ from nornir.core.inventory import (
     Hosts,
     Defaults,
     ParentGroups,
+    ConnectionOptions,
 )
 
 import re
@@ -22,15 +23,15 @@ SPECTRUM_PORT_MAP = {"32": 22, "7": 22, "3": 23}
 
 
 NETMIKO_MODEL_TYPE_MAP = {
-    "Rtr_Cisco": "cisco_ios",
-    "SwCiscoIOS": "cisco_ios",
-    "CiscoNXOS": "cisco_nxos",
-    "SwCat45xx": "cisco_ios",
-    "HubCat29xx": "cisco_ios",
+    "Rtr_Cisco": "ios",
+    "SwCiscoIOS": "ios",
+    "CiscoNXOS": "nxos_ssh",
+    "SwCat45xx": "ios",
+    "HubCat29xx": "ios",
     "CiscoASA": "cisco_asa",
 }
 
-NETMIKO_DEVICE_TYPE_MAP = {"CiscoRT": "cisco_ios", "JuniperRT": "junos"}
+NETMIKO_DEVICE_TYPE_MAP = {"CiscoRT": "ios", "JuniperRT": "junos"}
 
 
 def platform_calc(model_type_name: str, device_type: str) -> str:
@@ -40,7 +41,7 @@ def platform_calc(model_type_name: str, device_type: str) -> str:
     )
     if not platform and device_type:
         if re.search("Cisco", device_type):
-            platform = "cisco_ios"
+            platform = "ios"
         elif re.search("Juniper", device_type):
             platform = "junos"
 
@@ -67,55 +68,56 @@ def _process_data(hosts_data: List[Dict[str, str]]) -> Tuple[Hosts, Groups]:
     """
 
     # Placeholders for the hosts and groups data which will be popuated
-
     hosts = Hosts()
     groups = Groups()
 
     for device in hosts_data:
 
         # Global Collections for which this host is a member of
-
         gc_str = device.pop("0x12adb")
         gc_list = list(set(gc_str.split(":"))) if gc_str else []
 
         # Create a group for each Global Collection if it doesn't already exist
-
         for gc in gc_list:
             groups.setdefault(gc, Group(gc))
 
         # Retrieve the management port
-
         port = SPECTRUM_PORT_MAP.get(device.pop("0x12beb"))
 
         # If no port then assume this host cannot be accessed via CLI (skip)
-
         if not port:
             continue
 
         # Calculate platform type
-
         platform = platform_calc(device.get("0x10000"), device.get("0x23000e"))
 
-        # Telnet only Cisco devices need specific platform for Netmiko to work
-
-        if port == 23 and platform == "cisco_ios":
-            platform = "cisco_ios_telnet"
+        # Telnet-only Cisco devices need specific options for Netmiko and Napalm to work
+        if port == 23 and platform == "ios":
+            connection_options.update(
+                {
+                    "netmiko": ConnectionOptions(
+                        extras={"device_type": "cisco_ios_telnet"}
+                    ),
+                    "napalm": ConnectionOptions(
+                        extras={"optional_args": {"transport": "telnet"}}
+                    ),
+                }
+            )
+        else:
+            connection_options = {}
 
         # Fall back to generic
-
         if port == 22 and not platform:
             platform = "generic"
-        elif port == 23:
+        elif port == 23 and not platform:
             platform = "generic_telnet"
 
         # NETCONF for all Juniper devices
-
         if platform == "junos":
             port = 830
 
         # Use names for data keys otherwise the advanced filtering not possible
         # in Nornir
-
         data = dict()
         data["model_type"] = device.pop("0x10000", "")
         data["condition"] = int(device.pop("0x1000a", 0))
@@ -125,7 +127,6 @@ def _process_data(hosts_data: List[Dict[str, str]]) -> Tuple[Hosts, Groups]:
         data.update(device)
 
         # Finally create the host object
-
         hostname = data.pop("0x1006e")
         hosts[hostname] = Host(
             name=hostname,
@@ -133,6 +134,7 @@ def _process_data(hosts_data: List[Dict[str, str]]) -> Tuple[Hosts, Groups]:
             port=port,
             platform=platform,
             groups=ParentGroups([groups[gc] for gc in gc_list]),
+            connection_options=connection_options,
             data={**data},
         )
 
@@ -188,7 +190,6 @@ class SpectrumInventory:
         resp.raise_for_status()
 
         # Parse XML Data
-
         try:
             root = etree.fromstring(resp.content)
         except etree.XMLSyntaxError as err:
@@ -197,9 +198,7 @@ class SpectrumInventory:
         root = _strip_ns(root)
         models = root.findall(".//model")
 
-        data = [
-            {attr.get("id"): attr.text for attr in model} for model in models
-        ]
+        data = [{attr.get("id"): attr.text for attr in model} for model in models]
 
         hosts, groups = _process_data(data)
 
